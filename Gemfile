@@ -3,7 +3,7 @@ source 'https://rubygems.org'
 if ENV['CI']
   ruby RUBY_VERSION
 else
-  ruby '2.2.3'
+  ruby '2.6.2'
 end
 
 gem 'activesupport', require: 'active_support'
@@ -14,9 +14,11 @@ gem 'faraday', '~> 0.9'
 gem 'faraday_middleware', '~> 0.9'
 gem 'georuby', '~> 2.3.0'
 gem 'grape', '~> 0.9.0'
+gem 'json'
 gem 'pg'
 gem 'phone', '~> 1.3.0.beta0'
 gem 'pony', '~> 1.9'
+gem 'rack-cors', :require => 'rack/cors'
 gem 'rack-ssl'
 gem 'rake'
 gem 'sass', '~> 3.4'

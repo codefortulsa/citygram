@@ -1,6 +1,7 @@
 $(document).ready(function() {
   app.hookupMap();
   app.hookupSteps();
+  app.hideSteps();
 });
 
 var app = app || {};
@@ -10,9 +11,12 @@ app.state = {
   publisher_id: undefined,
 };
 
+L.mapbox.accessToken = 'pk.eyJ1IjoiYmlnZmxlZXQiLCJhIjoiY2swaDRqamQ3MDBkNzNtcGVzcnFwcDBvaiJ9.zX2y5xUXjSzqdLOA1dhG1A';
+
 app.eventMarkers = new L.FeatureGroup();
 
 app.hookupMap = function() {
+  document.getElementById('locatormap').innerHTML = "<div id='map'><div class='map-key-panel js-dot-legend'><span class='map-event-dot'></span>Click to see notification</div></div>";
   var center = JSON.parse($('meta[name=mapCenter]').attr('content'));
   var options = {
     zoom: 13,
@@ -22,7 +26,49 @@ app.hookupMap = function() {
   };
   var mapId = $('meta[name=mapId]').attr('content');
   var map = app.map = L.mapbox.map('map', mapId, options);
+  L.mapbox.styleLayer("mapbox://styles/bigfleet/ck0i6duy10nm61co20ho8buia").addTo(map);
+  var locality = document.getElementById('user-selected-locality');
+  if ( locality != null ) {
+    locality.onclick = function(e) {
+      e.preventDefault();
+
+      $('.menu-ui a.selected').removeClass('selected');
+      $(e.target).addClass('selected');
+
+      var address = $('#geolocate').val();
+      if (! address) { //if address is not avail, center map on region when clicked.
+          var pos = e.target.getAttribute('data-position');
+          if (pos) {
+              var loc = pos.split(',');
+              app.map.setView(loc, 13);
+          };
+      } else {
+        app.geolocate(e);
+      }
+    }
+  }
 };
+
+app.hideSteps = function(){
+  app.hideStep2();
+  app.hideStep3();
+}
+
+app.showStep2 = function(){
+  $('#step2').removeClass('hide');
+}
+
+app.showStep3 = function(){
+  $('#step3').removeClass('hide');
+}
+
+app.hideStep2 = function(){
+  $('#step2').addClass('hide');
+}
+
+app.hideStep3 = function(){
+  $('#step3').addClass('hide');
+}
 
 app.hookupSteps = function() {
   $('.startButton').on('click', function() {
@@ -40,18 +86,13 @@ app.hookupSteps = function() {
     $('.publisher').removeClass('is-active');
   });
 
-  $('.publisher:not(.soon) .publisher-btn').on('click', function(event) {
+  $('.publisher:not(.soon)').on('click', function(event) {
     $('.publisher').removeClass('selected');
 
-    var $publisher = $(this).parents('.publisher:not(.soon)');
+    var $publisher = $(this);
     $publisher.addClass('selected');
 
-    // Update the confirmation section with the name
-    app.state.publisher_id = $publisher.data('publisher-id');
-    app.eventsArePolygons = $publisher.data('publisher-title').match(/Leaf Collection/);
-    $('.js-dot-legend').css('visibility', app.eventsArePolygons ? 'hidden' : 'visible');
-
-    $('.confirmationType').html($publisher.data('publisher-title'));
+    app.setPublisher($publisher);
 
     // Remove disabled state styling from subscribe buttons
     $('.smsButton, .emailButton').removeClass('disabledButton');
@@ -64,6 +105,7 @@ app.hookupSteps = function() {
 
     app.scrollToElement($('#step2'));
   });
+
 
   app.handleChannelClick = function(channel, channelBtn) {
     if (channelBtn.hasClass('disabledButton')) {
@@ -124,9 +166,22 @@ app.hookupSteps = function() {
     e && e.preventDefault();
     var address = $('#geolocate').val();
     if (! address) { return }
-
-    var city = $('.publisher.selected').data('publisher-city');
-    var state = $('.publisher.selected').data('publisher-state');
+    var city = undefined;
+    var state = undefined;
+    // if within a geography that has localities, e.g. Triangle
+    // that consideration is primary.
+    var usesLocality = $("#user-selected-locality");
+    if (usesLocality && usesLocality.length == 0){
+      var publisherSelection = $('.publisher.selected');
+      city = publisherSelection.data('publisher-city');
+      state = publisherSelection.data('publisher-state');
+    } else {
+      // locality cannot activate without selection
+      var localitySelection = $("#user-selected-locality a.selected");
+      if (! localitySelection) { return }
+      city = localitySelection.data('city');
+      state = localitySelection.data('state');
+    }
     var radiusMiles = parseFloat($('#user-selected-radius').val());
     var radiusKm =radiusMiles * 1.60934
     var radiusMeters = radiusKm * 1000;
@@ -142,7 +197,6 @@ app.hookupSteps = function() {
         type: 'Polygon',
         coordinates: [bbox],
       });
-
       // Remove old layers
       if (prevMarker) app.map.removeLayer(prevMarker);
       if (prevCircle) app.map.removeLayer(prevCircle);
@@ -153,9 +207,8 @@ app.hookupSteps = function() {
 
 
       if (app.eventsArePolygons) {
-        // copy title from the surrounding event polygon to the address marker
         app.updateEventsForGeometry(app.state.geom, function(events) {
-          prevMarker.bindPopup("<p>"+app.hyperlink(events[0]['title'])+"</p>").openPopup();
+          app.copyEventTitleToMarker(events, prevMarker);
         });
       }
 
@@ -165,9 +218,11 @@ app.hookupSteps = function() {
       // Frequency estimate
       app.getEventsCount(app.state.publisher_id, app.state.geom, oneWeekAgo, function(response) {
         $('#freqRadius').html(radiusMiles + ' mi');
-        $('#freqAddress').html(address);
+        $('#freqAddress').html(address + ' ' + city + ', ' + state);
         $('#freqNum').html(response.events_count + ' citygrams');
       });
+
+      app.showStep3();
 
     });
   };
@@ -184,10 +239,45 @@ app.hookupSteps = function() {
 
 };
 
+app.copyEventTitleToMarker = function(events, marker) {
+  var surroundingEvent;
+  var markerGeoJSON = marker.toGeoJSON();
+
+  events.forEach(function(event) {
+    var polygon = {"type": "Feature", geometry: JSON.parse(event.geom)};
+    if (turf.inside(markerGeoJSON, polygon)) {
+      surroundingEvent = event;
+    }
+  });
+
+  if (surroundingEvent) {
+    marker.bindPopup("<p>"+app.hyperlink(surroundingEvent.title)+"</p>").openPopup();
+  }
+}
+
+app.setPublisher = function($publisher) {
+  app.state.publisher_id = $publisher.data('publisher-id');
+  app.eventsArePolygons = $publisher.data('publisher-events-are-polygons');
+
+  if ($publisher.data('publisher-event-display-endpoint')) {
+    app.eventDisplayEndpoint = $publisher.data('publisher-event-display-endpoint');
+  } else {
+    app.eventDisplayEndpoint = '/publishers/'+app.state.publisher_id+'/events';
+  }
+
+  $('.js-dot-legend').css('visibility', app.eventsArePolygons ? 'hidden' : 'visible');
+  $('.confirmationType').html($publisher.data('publisher-title'));
+
+  app.showStep2();
+}
+
 app.hyperlink = Autolinker.link;
 
 // Populate events
 app.updateEvents = function(bounds) {
+  // Update Leaflet map size on mobile
+  app.map.invalidateSize();
+
   var mapGeometry = {
     type: 'Polygon',
     coordinates: [[
@@ -205,7 +295,7 @@ app.updateEvents = function(bounds) {
     });
 
     // tiny radius mimics an address point inside event polygon
-    if (app.eventsArePolygons) { app.selectTinyRadius(); }
+    // if (app.eventsArePolygons) { app.selectTinyRadius(); }
 
     events.forEach(function(event, index) {
       var marker = app.displayEventMarker(event);
@@ -236,15 +326,18 @@ app.displayEventMarker = function(event) {
   } else {
     marker = L.circleMarker([geometry.coordinates[1], geometry.coordinates[0]], { radius: 6, color: '#FC442A' })
   }
-  marker.addTo(app.map).bindPopup(html);
-
+  try {
+    marker.addTo(app.map).bindPopup(html);
+  } catch (e) {
+    console.log("Error loading event '", event.title.substr(0, 10), "'", e);
+  }
   app.eventMarkers.addLayer(marker);
   return marker;
 }
 
 app.updateEventsForGeometry = function(geometry, callback){
   if (!app.state.publisher_id) return;
-  $.getJSON('/publishers/'+app.state.publisher_id+'/events', { geometry: geometry }, callback);
+  $.getJSON(app.eventDisplayEndpoint, { geometry: geometry }, callback);
 };
 
 app.getEventsCount = function(publisherId, geometry, since, callback){
@@ -259,9 +352,10 @@ app.scrollToElement = function(el) {
 };
 
 app.geocode = function(address, city, state, callback, context) {
-  var url = 'https://maps.googleapis.com/maps/api/geocode/json?address=' + encodeURIComponent(address);
-      url += '&components=locality:' + encodeURIComponent(city);
-      url += '|administrative_area:' + encodeURIComponent(state);
+   var url = 'https://maps.googleapis.com/maps/api/geocode/json?address=' + encodeURIComponent(address);
+      url += encodeURIComponent(' '+city);
+      url += encodeURIComponent(' '+state);
+      url += '&key=AIzaSyCeF_VBd1M0V4ErSBbeerMgSyhalX9PIeM';
 
   $.getJSON(url, function(response) {
     if (response.error || response.results.length === 0) {
@@ -277,11 +371,18 @@ app.geocode = function(address, city, state, callback, context) {
 
 app.resetState = function() {
   app.state.publisher_id = undefined;
+  app.eventDisplayEndpoint = undefined;
   $('.publisher').removeClass('selected');
 
   // Let's leave the location and phone number in place, for easy re-subscribe
 };
 
 app.submitSubscription = function(callback) {
-  $.post('/subscriptions', { subscription: app.state }, callback);
+  $.ajax({
+    type: 'PUT',
+    url: '/subscriptions',
+    contentType: 'application/json',
+    data: JSON.stringify({ subscription: app.state }),
+  }).done(callback);
 };
+

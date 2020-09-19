@@ -1,18 +1,59 @@
+sudo: false
 language: ruby
 rvm:
-  - 2.2.2
+  - 2.5.1
   - ruby-head
+services:
+  - postgresql
 addons:
-  postgresql: "9.3"
+  postgresql: 9.6
+  apt:
+    packages:
+      - postgresql-9.6-postgis-2.3
 matrix:
   allow_failures:
     - rvm: ruby-head
+before_install:
+  - psql -c 'create database citygram_test;' -U postgres
+  - psql -U postgres -c "create extension postgis"
+  - gem update --system
+  - gem install bundler
 script:
-  - psql -V
   - cp .env.sample .env
-  - bundle exec rake db:create db:migrate DATABASE_URL=postgres://localhost/citygram_test
+  - bundle exec rake db:migrate DATABASE_URL=postgres://localhost/citygram_test
   - bundle exec rake
 notifications:
   webhooks: http://project-monitor.codeforamerica.org/projects/77db7e4d-a05a-4ee8-b7ab-3bd29c6dd1b0/status
-sudo: false
 cache: bundler
+
+jobs:
+  include:
+    - stage: images
+      services:
+        - docker
+      dist: trusty
+      sudo: required
+      before_install: skip
+      install: skip
+      script:
+        - docker build -f docker/data/Dockerfile -t ${DOCKER_IMAGE_DATA} .
+        - docker build -f docker/citygram/Dockerfile -t ${DOCKER_IMAGE_CITYGRAM} .
+      deploy: # needs to be part of this step to have access to the built images
+        provider: script
+        script:
+          - echo "$DOCKER_PASSWORD" | docker login -u "$DOCKER_USERNAME" --password-stdin
+          - docker push ${DOCKER_IMAGE_DATA}
+          - docker push ${DOCKER_IMAGE_CITYGRAM}
+        on:
+          branch: master
+          condition: "$DOCKER_PASSWORD != '' && $DOCKER_USERNAME != '' && $DOCKER_IMAGE_CITYGRAM != ''"
+    - stage: deploy
+      if: "branch = master AND env(HEROKU_API_KEY) IS present AND env(HEROKU_APP) is present"
+      before_install: skip
+      install: skip
+      script: skip
+      deploy:
+        provider: heroku
+        api_key:
+          "$HEROKU_API_KEY"
+        app: "$HEROKU_APP"
